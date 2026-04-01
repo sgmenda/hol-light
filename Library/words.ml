@@ -8895,6 +8895,97 @@ let BITBLAST_TAC = BITBLAST_THEN (CONV_TAC o BDD_DEFTAUT);;
 let BITBLAST_RULE tm = time prove(tm,BITBLAST_TAC);;
 
 (* ------------------------------------------------------------------------- *)
+(* Carry-less multiplication of words over GF(2)                             *)
+(* ------------------------------------------------------------------------- *)
+
+let word_clmul = define
+ `(word_clmul:M word->N word->P word) x y =
+  word_of_bits {k | ODD(CARD {i | i <= k /\ bit i x /\ bit (k - i) y})}`;;
+
+let BIT_WORD_CLMUL = prove
+ (`!x y k. bit k ((word_clmul:M word->N word->P word) x y) <=>
+           k < dimindex(:P) /\
+           ODD(nsum (0..k) (\i. bitval(bit i x) * bitval(bit (k - i) y)))`,
+  REPEAT GEN_TAC THEN
+  REWRITE_TAC[word_clmul; BIT_WORD_OF_BITS; IN_ELIM_THM] THEN
+  AP_TERM_TAC THEN REWRITE_TAC[GSYM BITVAL_AND] THEN
+  REWRITE_TAC[bitval; GSYM NSUM_RESTRICT_SET] THEN
+  SIMP_TAC[NSUM_CONST; FINITE_RESTRICT; FINITE_NUMSEG] THEN
+  REWRITE_TAC[MULT_CLAUSES; LE_0; IN_NUMSEG]);;
+
+let WORD_CLMUL_0 = prove
+ (`(!y. (word_clmul:M word->N word->P word) (word 0) y = word 0) /\
+   (!x. (word_clmul:M word->N word->P word) x (word 0) = word 0)`,
+  REWRITE_TAC[word_clmul; BIT_WORD_0; MULT_CLAUSES; EMPTY_GSPEC;
+              CARD_CLAUSES; ODD; WORD_OF_BITS_EMPTY]);;
+
+let WORD_CLMUL_ZX = prove
+ (`(!x y. word_clmul (word_zx x:P word) y =
+          (word_clmul:M word->N word->P word) x y) /\
+   (!x y. word_clmul x (word_zx y:P word) =
+          (word_clmul:M word->N word->P word) x y)`,
+  REPEAT STRIP_TAC THEN REWRITE_TAC[word_clmul; BIT_WORD_ZX] THEN
+  GEN_REWRITE_TAC I [WORD_OF_BITS_EQ] THEN SIMP_TAC[IN_ELIM_THM] THEN
+  REPEAT STRIP_TAC THEN AP_TERM_TAC THEN AP_TERM_TAC THEN
+  GEN_REWRITE_TAC I [EXTENSION] THEN GEN_TAC THEN
+  REWRITE_TAC[IN_ELIM_THM] THEN
+  EQ_TAC THEN STRIP_TAC THEN ASM_REWRITE_TAC[] THEN ASM_ARITH_TAC);;
+
+let WORD_CLMUL_STEP = prove
+ (`!x y. (word_clmul:M word->N word->N word) x y =
+         word_xor (if bit 0 x then y else word 0)
+                  (word_clmul (word_ushr x 1) (word_shl y 1))`,
+  REPEAT GEN_TAC THEN GEN_REWRITE_TAC I [WORD_EQ_BITS_ALT] THEN
+  X_GEN_TAC `i:num` THEN DISCH_TAC THEN
+  ASM_REWRITE_TAC[BIT_WORD_XOR; BIT_WORD_CLMUL] THEN
+  REWRITE_TAC[TAUT `(p <=> ~(q <=> r)) <=> ~(p <=> r) <=> q`] THEN
+  REWRITE_TAC[GSYM ODD_ADD] THEN
+  REWRITE_TAC[BIT_WORD_USHR; BIT_WORD_SHL] THEN
+  ASM_SIMP_TAC[ARITH_RULE `i:num < N ==> i - j < N`] THEN
+  REWRITE_TAC[ARITH_RULE `i - j - 1 = i - (j + 1)`] THEN
+  REWRITE_TAC[ARITH_RULE `1 <= i - j <=> j + 1 <= i`] THEN
+  REWRITE_TAC[GSYM(SPEC `1` NSUM_OFFSET)] THEN
+  SIMP_TAC[NSUM_CLAUSES_LEFT; LE_0] THEN REWRITE_TAC[ADD_CLAUSES] THEN
+  REWRITE_TAC[GSYM ADD1; NSUM_CLAUSES_NUMSEG; ARITH_RULE `1 <= SUC n`] THEN
+  SIMP_TAC[ARITH_RULE `~(SUC i <= i)`; BITVAL_CLAUSES; MULT_CLAUSES] THEN
+  REWRITE_TAC[ADD_CLAUSES; ARITH_RULE `(i + j) + j = 2 * j + i`] THEN
+  REWRITE_TAC[ODD_ADD; ODD_MULT; ARITH_ODD; SUB_0] THEN
+  REWRITE_TAC[bitval] THEN REPEAT(COND_CASES_TAC THEN ASM_REWRITE_TAC[]) THEN
+  REWRITE_TAC[BIT_WORD_0] THEN CONV_TAC NUM_REDUCE_CONV);;
+
+let WORD_CLMUL_CONV =
+  let in_conv =
+    GEN_REWRITE_CONV I [GSYM(CONJUNCT2 WORD_CLMUL_ZX)] THENC
+    RAND_CONV WORD_ZX_CONV
+  and base_conv =
+    GEN_REWRITE_CONV I [CONJUNCT2 WORD_CLMUL_0]
+  and step_conv =
+    GEN_REWRITE_CONV I [WORD_CLMUL_STEP] THENC
+    BINOP2_CONV
+     (RATOR_CONV(LAND_CONV BIT_WORD_CONV) THENC
+      GEN_REWRITE_CONV I [COND_CLAUSES])
+     (BINOP2_CONV (WORD_USHR_CONV) WORD_SHL_CONV) in
+  let rec conv tm =
+    try base_conv tm with Failure _ ->
+    (step_conv THENC RAND_CONV conv THENC WORD_XOR_CONV) tm in
+  let fullconv = in_conv THENC conv in
+  fun tm ->
+    match tm with
+      Comb(Comb(Const("word_clmul",_),
+                Comb(Const("word",_),m)),
+            Comb(Const("word",_),n))
+      when is_numeral m && is_numeral n -> fullconv tm
+  | _ -> failwith "WORD_CLMUL_CONV";;
+
+(* https://github.com/google/boringssl/blob/7f5a43945aab78fe4e71459ac4881ff9033d73d8/crypto/cipher/test/cipher_tests.txt#L338-L344 *)
+let _ = prove
+ (`word_clmul (word 0x0388DACE60B6A392F328C2B971B2FE78 : 128 word)
+              (word 0x66E94BD4EF8A2C3B884CFA59CA342B2E : 128 word)
+              : 256 word =
+   word 0x009B5741881E078903A29B1A4B43CAF41FF4A78A706884B0473EFE75603871D0`,
+  CONV_TAC(LAND_CONV WORD_CLMUL_CONV) THEN REFL_TAC);;
+
+(* ------------------------------------------------------------------------- *)
 (* SIMD repetition of a unary (usimd) or binary (simd) function.             *)
 (* ------------------------------------------------------------------------- *)
 
