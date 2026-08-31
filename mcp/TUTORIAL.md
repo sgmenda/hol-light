@@ -131,7 +131,7 @@ apply_tactic  "DISJ2_TAC THEN REWRITE_TAC[EVEN_ADD] THEN ASM_REWRITE_TAC[NOT_EVE
 
 **Interactive:**
 1. **set_goal** — state the theorem
-2. **goal_state** — inspect hypotheses and conclusion
+2. **goal_state** — inspect hypotheses and conclusion (use **goal_summary** / **goal_hypothesis** when hypotheses are large)
 3. **search_theorems** — find relevant lemmas
 4. **apply_tactic** — try automation first (`ARITH_TAC`, `MESON_TAC[]`), then targeted tactics
 5. **apply_tactics** — batch multiple tactics in one call for straightforward sequences

@@ -89,6 +89,77 @@ let mcp_json_after_tactic () =
     "{\"proved\":true,\"theorem\":" ^ mcp_json_string (string_of_thm th) ^ "}"
   | _ -> mcp_json_goalstate ();;
 
+(* Cheap structural summary of the goal state: sizes and a truncated
+   conclusion head, without serializing hypothesis terms. Lets a caller see
+   the shape of a large goal (e.g. 60KB+ AES-tweak terms) without spending the
+   output budget on the full goal_state dump. *)
+let mcp_buf_goal_summary buf head_chars ((asl, w) : goal) =
+  let c = string_of_term w in
+  let clen = String.length c in
+  let head =
+    if clen <= head_chars then c
+    else (String.sub c 0 head_chars) ^ "..." in
+  Buffer.add_string buf "{\"num_hyps\":";
+  Buffer.add_string buf (string_of_int (List.length asl));
+  Buffer.add_string buf ",\"conclusion_chars\":";
+  Buffer.add_string buf (string_of_int clen);
+  Buffer.add_string buf ",\"conclusion_head\":";
+  mcp_buf_json_string buf head;
+  Buffer.add_char buf '}';;
+
+let mcp_json_goal_summary head_chars =
+  let buf = Buffer.create 256 in
+  (match !current_goalstack with
+  | [] ->
+    Buffer.add_string buf
+      "{\"goals\":[],\"num_subgoals\":0,\"total_goals\":0}"
+  | gs ->
+    let gl = match gs with (_, gl, _) :: _ -> gl | [] -> [] in
+    let n = List.length gl in
+    let num_sub = match gs with
+      | [_, _, _] -> min 1 n
+      | (_, _, _) :: (_, gl0, _) :: _ ->
+        let p = n - List.length gl0 in
+        if p < 1 then 1 else p + 1
+      | [] -> 0 in
+    Buffer.add_string buf "{\"goals\":[";
+    let first = ref true in
+    List.iter (fun g ->
+      if !first then first := false else Buffer.add_char buf ',';
+      mcp_buf_goal_summary buf head_chars g
+    ) gl;
+    Buffer.add_string buf "],\"num_subgoals\":";
+    Buffer.add_string buf (string_of_int num_sub);
+    Buffer.add_string buf ",\"total_goals\":";
+    Buffer.add_string buf (string_of_int n);
+    Buffer.add_char buf '}');
+  Buffer.contents buf;;
+
+(* Fetch a single hypothesis of the top goal by 0-based index, so a caller can
+   read one large hypothesis term without dumping all of them. Index order
+   matches goal_state (List.rev of the internal assumption list). *)
+let mcp_json_hypothesis idx =
+  match !current_goalstack with
+  | [] -> mcp_json_error "no goal in progress"
+  | (_, [], _) :: _ -> mcp_json_error "goal is already proved (no subgoals)"
+  | (_, (asl, _) :: _, _) :: _ ->
+    let hyps = List.rev asl in
+    let n = List.length hyps in
+    if idx < 0 || idx >= n then
+      mcp_json_error
+        (Printf.sprintf "hypothesis index %d out of range (0..%d)" idx (n - 1))
+    else
+      let (label, th) = List.nth hyps idx in
+      let buf = Buffer.create 256 in
+      Buffer.add_string buf "{\"index\":";
+      Buffer.add_string buf (string_of_int idx);
+      Buffer.add_string buf ",\"label\":";
+      mcp_buf_json_string buf label;
+      Buffer.add_string buf ",\"term\":";
+      mcp_buf_json_string buf (string_of_term (concl th));
+      Buffer.add_char buf '}';
+      Buffer.contents buf;;
+
 let mcp_json_backtrack n =
   try
     for _ = 1 to n do ignore (b ()) done;

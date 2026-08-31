@@ -37,7 +37,7 @@ async def main():
             # Check tools registered
             tools = await session.list_tools()
             tool_names = set(t.name for t in tools.tools)
-            expected_tools = {"apply_tactic", "apply_tactics", "backtrack", "eval", "goal_state", "hol_help", "hol_interrupt", "hol_load", "hol_restart", "hol_status", "hol_type", "prove", "search_theorems", "set_goal", "start_recording", "stop_recording"}
+            expected_tools = {"apply_tactic", "apply_tactics", "backtrack", "eval", "goal_state", "goal_summary", "goal_hypothesis", "hol_help", "hol_interrupt", "hol_load", "hol_restart", "hol_status", "hol_type", "prove", "search_theorems", "set_goal", "start_recording", "stop_recording"}
             check("tools registered", expected_tools.issubset(tool_names),
                   f"missing: {expected_tools - tool_names}")
 
@@ -69,6 +69,37 @@ async def main():
             gs = json.loads(r.content[0].text)
             check("goal_state: has goal", len(gs["goals"]) == 1, str(gs))
             check("goal_state: conclusion", "n + 0 = n" in gs["goals"][0]["conclusion"], str(gs))
+
+            # goal_summary — cheap shape, no hypothesis terms
+            r = await session.call_tool("goal_summary", {})
+            gs = json.loads(r.content[0].text)
+            check("goal_summary: one goal", len(gs["goals"]) == 1, str(gs))
+            check("goal_summary: num_hyps", gs["goals"][0]["num_hyps"] == 0, str(gs))
+            check("goal_summary: conclusion_chars",
+                  gs["goals"][0]["conclusion_chars"] > 0, str(gs))
+            check("goal_summary: no hypotheses key",
+                  "hypotheses" not in gs["goals"][0], str(gs))
+
+            # goal_summary — head truncation
+            r = await session.call_tool("goal_summary", {"head_chars": 3})
+            gs = json.loads(r.content[0].text)
+            check("goal_summary: head truncated",
+                  gs["goals"][0]["conclusion_head"].endswith("..."), str(gs))
+
+            # goal_hypothesis — set a goal with hypotheses, then read one by index
+            # (STRIP_TAC leaves p, q as hypotheses with an open conclusion)
+            await session.call_tool("eval", {"code": "g `p /\\ q ==> q /\\ p`"})
+            await session.call_tool("apply_tactic", {"tactic": "STRIP_TAC"})
+            r = await session.call_tool("goal_hypothesis", {"index": 0})
+            hyp = json.loads(r.content[0].text)
+            check("goal_hypothesis: index 0", hyp.get("index") == 0, str(hyp))
+            check("goal_hypothesis: term", "term" in hyp, str(hyp))
+            r = await session.call_tool("goal_hypothesis", {"index": 99})
+            hyp = json.loads(r.content[0].text)
+            check("goal_hypothesis: out of range", "error" in hyp, str(hyp))
+
+            # restore the running example goal for subsequent checks
+            await session.call_tool("set_goal", {"goal": "`!n. n + 0 = n`"})
 
             # apply_tactic — GEN_TAC
             r = await session.call_tool("apply_tactic", {"tactic": "GEN_TAC"})

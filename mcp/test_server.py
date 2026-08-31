@@ -247,6 +247,63 @@ def test_goal_state_tool_with_goal():
     assert len(result["goals"]) >= 1
 
 
+# --- goal_summary tool ---
+
+def test_goal_summary_empty():
+    server._eval_code("current_goalstack := []")
+    result = json.loads(server.goal_summary())
+    assert result["goals"] == []
+    assert result["total_goals"] == 0
+
+
+def test_goal_summary_shape_without_hyp_terms():
+    # STRIP_TAC moves p, q into the hypotheses, leaving an open conclusion.
+    server.set_goal("`p /\\ q ==> q /\\ p`")
+    server._eval_code("e STRIP_TAC")
+    result = json.loads(server.goal_summary())
+    assert len(result["goals"]) == 1
+    g = result["goals"][0]
+    assert g["num_hyps"] == 2
+    assert g["conclusion_chars"] > 0
+    # summary must NOT carry the full hypothesis terms
+    assert "hypotheses" not in g
+    assert g["conclusion_head"] == "q /\\ p"
+
+
+def test_goal_summary_truncates_conclusion_head():
+    server.set_goal("`aaaaaaaaaa + bbbbbbbbbb + cccccccccc = 0`")
+    result = json.loads(server.goal_summary(head_chars=5))
+    head = result["goals"][0]["conclusion_head"]
+    assert head.endswith("...")
+    assert len(head) == 8  # 5 chars + "..."
+    assert result["goals"][0]["conclusion_chars"] > 5
+
+
+# --- goal_hypothesis tool ---
+
+def test_goal_hypothesis_by_index():
+    server.set_goal("`p /\\ q ==> q /\\ p`")
+    server._eval_code("e STRIP_TAC")
+    h0 = json.loads(server.goal_hypothesis(0))
+    assert h0["index"] == 0
+    assert "term" in h0
+    h1 = json.loads(server.goal_hypothesis(1))
+    assert h1["term"] != h0["term"]
+
+
+def test_goal_hypothesis_out_of_range():
+    server.set_goal("`p /\\ q ==> q /\\ p`")
+    server._eval_code("e STRIP_TAC")
+    result = json.loads(server.goal_hypothesis(99))
+    assert "error" in result
+
+
+def test_goal_hypothesis_no_goal():
+    server._eval_code("current_goalstack := []")
+    result = json.loads(server.goal_hypothesis(0))
+    assert "error" in result
+
+
 # --- set_goal tool ---
 
 def test_set_goal_tool():

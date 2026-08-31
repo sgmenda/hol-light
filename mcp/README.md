@@ -35,7 +35,9 @@ See [TUTORIAL.md](TUTORIAL.md) for more examples (including s2n-bignum ARM proof
 |------|-------------|--------|
 | `eval` | Evaluate arbitrary OCaml/HOL Light code | Structured JSON (truncated) |
 | `set_goal` | Set a proof goal, return initial state | Structured JSON |
-| `goal_state` | Return current proof goals | Structured JSON |
+| `goal_state` | Return current proof goals (full hypotheses + conclusions) | Structured JSON |
+| `goal_summary` | Cheap goal shape (sizes + truncated conclusion, no hyp terms) | Structured JSON |
+| `goal_hypothesis` | Return one hypothesis of the top goal by index | Structured JSON |
 | `apply_tactic` | Apply a tactic, return new state or proved theorem | Structured JSON |
 | `apply_tactics` | Apply a list of tactics in one round-trip | Structured JSON |
 | `prove` | One-shot prove: goal + tactic → theorem | Structured JSON |
@@ -53,6 +55,8 @@ See [TUTORIAL.md](TUTORIAL.md) for more examples (including s2n-bignum ARM proof
 `eval` returns `{"success", "output", "output_truncated", "full_output_chars", "time_seconds"}`. Large outputs are truncated to `max_output_chars` (default 4000, configurable). Override per-call with `max_output_chars=N`.
 
 `hol_load` returns `{"success", "file", "time_seconds"}` (plus `"error"` on failure). Intermediate output is suppressed — use `eval` with `needs "file.ml"` if you need verbose output.
+
+For goals with large hypotheses (e.g. AES-tweak terms), `goal_state` can be tens of KB because it serializes every hypothesis in full. Prefer `goal_summary` to see the shape (`num_hyps`, `conclusion_chars`, a truncated `conclusion_head`) at fixed small cost, then `goal_hypothesis(index)` to read a specific hypothesis.
 
 ## Setup
 

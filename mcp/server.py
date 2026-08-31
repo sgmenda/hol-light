@@ -535,6 +535,43 @@ def goal_state() -> str:
 
 
 @mcp.tool()
+def goal_summary(head_chars: int = 120) -> str:
+    """Return a cheap structural summary of the goal state as JSON.
+
+    Unlike goal_state, this does NOT serialize hypothesis terms, so it stays
+    small even for goals with large hypotheses (e.g. 60KB+ AES-tweak terms).
+    Use it to see the shape of a goal, then goal_hypothesis to read specific
+    hypotheses by index.
+
+    Args:
+        head_chars: Max chars of each conclusion to include (default 120);
+            longer conclusions are truncated with a trailing "...".
+
+    Returns JSON: {"goals": [{"num_hyps": N, "conclusion_chars": C,
+                              "conclusion_head": "..."}],
+                   "num_subgoals": N, "total_goals": M}
+    Returns empty goals list if no proof is in progress.
+    """
+    return _extract_json(_eval_json(f"mcp_json_goal_summary {int(head_chars)}")[0])
+
+
+@mcp.tool()
+def goal_hypothesis(index: int) -> str:
+    """Return a single hypothesis of the top goal by index, as JSON.
+
+    Lets you read one large hypothesis term without dumping the whole goal.
+    Index order matches goal_state's hypotheses list (0-based).
+
+    Args:
+        index: 0-based index of the hypothesis to fetch.
+
+    Returns JSON: {"index": I, "label": "...", "term": "..."}
+        or {"error": "..."} if there is no goal or the index is out of range.
+    """
+    return _extract_json(_eval_json(f"mcp_json_hypothesis {int(index)}")[0])
+
+
+@mcp.tool()
 def apply_tactic(tactic: str, timeout: int = None) -> str:
     """Apply a tactic to the current goal and return the resulting state as JSON.
 

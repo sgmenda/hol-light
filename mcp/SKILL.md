@@ -16,7 +16,7 @@ HOL Light is a classical higher-order logic theorem prover. The law of excluded 
 
 **Interactive proofs:**
 1. **set_goal** — state the theorem to prove
-2. **goal_state** — inspect current goals (check hypotheses and conclusion)
+2. **goal_state** — inspect current goals (check hypotheses and conclusion). For goals with large hypotheses, use **goal_summary** for the shape, then **goal_hypothesis** to read one hypothesis by index.
 3. **search_theorems** — find relevant lemmas by name substring
 4. **apply_tactic** — apply a tactic; check response for `"proved":true`
 5. **apply_tactics** — apply multiple tactics in one round-trip (faster for straightforward sequences)
