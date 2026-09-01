@@ -49,6 +49,11 @@ async def main():
             check("eval: has time_seconds", isinstance(ev["time_seconds"], float), str(ev))
             check("eval: has full_output_chars", isinstance(ev["full_output_chars"], int), str(ev))
 
+            # report_timing is quieted at startup (no per-step CPU-time chatter)
+            r = await session.call_tool("eval", {"code": "!report_timing"})
+            ev = json.loads(r.content[0].text)
+            check("eval: report_timing off", "false" in ev["output"], str(ev))
+
             # eval — truncation
             r = await session.call_tool("eval", {"code": 'search [name "ADD"]', "max_output_chars": 100})
             ev = json.loads(r.content[0].text)

@@ -414,18 +414,18 @@ def _replay_prefix():
                     removed = 0
                     while removed < steps and replayed:
                         replayed.pop()
-                        _eval_raw("b()")
+                        _eval_raw("mcp_b()")
                         removed += 1
                 elif entry.get("action") == "tactic":
-                    result, _ = _eval_raw(f'e({entry["tactic"]})')
+                    result, _ = _eval_raw(f'mcp_e({entry["tactic"]})')
                     if _is_error_output(_strip_ansi(result)):
                         for _ in range(len(replayed)):
-                            _eval_raw("b()")
+                            _eval_raw("mcp_b()")
                         return
                     replayed.append(entry)
     except (json.JSONDecodeError, KeyError, OSError):
         for _ in range(len(replayed)):
-            _eval_raw("b()")
+            _eval_raw("mcp_b()")
         return
     global _recording, _recording_flushed
     _recording = replayed
@@ -585,7 +585,7 @@ def apply_tactic(tactic: str, timeout: int = None) -> str:
       - Proof complete: {"proved": true, "theorem": "..."}
       - Error: {"error": "..."}
     """
-    code = (f'(try ignore(e({tactic})); '
+    code = (f'(try ignore(mcp_e({tactic})); '
             f'print_string (mcp_json_after_tactic ()) '
             f'with Failure s -> print_string (mcp_json_error s) '
             f'| e -> print_string (mcp_json_error (Printexc.to_string e))); '
@@ -654,16 +654,52 @@ def prove(goal: str, tactic: str, timeout: int = None) -> str:
 def backtrack(steps: int = 1) -> str:
     """Undo tactic steps and return the resulting goal state as JSON.
 
+    Primary path uses HOL Light's own undo stack (b()). If that stack is
+    exhausted (e.g. after a restart wiped the in-memory history, or when
+    rewinding across the set_goal boundary) but a recording of the applied
+    tactics exists, this falls back to rebuilding the target state by
+    replaying the recorded tactic prefix in a single round-trip.
+
     Args:
         steps: Number of steps to undo (default 1).
 
-    Returns JSON goal state or {"error": "..."} if can't back up.
+    Returns JSON goal state or {"error": "..."} if it cannot back up
+    (no undo history and no recording deep enough to reach the target).
     """
     with _lock:
         _start_hol()
         _load_helpers()
-        result = _extract_json(_eval_raw(f'print_string (mcp_json_backtrack {steps}); print_newline ()')[0])
+        result = _extract_json(
+            _eval_raw(f'print_string (mcp_json_backtrack {steps}); print_newline ()')[0])
+        parsed = _safe_json(result)
+        if parsed is not None and "Can't back up any more" in str(parsed.get("error", "")):
+            replayed = _backtrack_via_replay(steps)
+            if replayed is not None:
+                return replayed
+            # No recording deep enough — surface the honest b() error.
+            return result
         _record_backtrack(steps)
+    return result
+
+
+def _backtrack_via_replay(steps: int):
+    """Fallback for backtrack when b() is exhausted: rebuild the target state
+    by replaying (recorded tactics - steps) from the initial goal.
+
+    Caller must hold _lock. Returns the goal-state JSON string on success, or
+    None if there is no recording deep enough to reach the target step.
+    """
+    tactics = [e["tactic"] for e in _recording if e.get("action") == "tactic"]
+    keep = len(tactics) - steps
+    if not tactics or keep < 0:
+        return None
+    tac_list = "[" + "; ".join(tactics[:keep]) + "]"
+    result = _extract_json(
+        _eval_raw(f'print_string (mcp_json_backtrack_replay {tac_list}); print_newline ()')[0])
+    parsed = _safe_json(result)
+    if parsed is None or "error" in parsed:
+        return None
+    _record_backtrack(steps)
     return result
 
 
@@ -689,7 +725,7 @@ def set_goal(goal: str) -> str:
 
     Returns JSON goal state.
     """
-    code = (f'ignore(g({goal})); '
+    code = (f'ignore(mcp_g({goal})); '
             f'print_string (mcp_json_goalstate ()); print_newline ()')
     return _extract_json(_eval_code(code)[0])
 
@@ -1430,6 +1466,16 @@ def _extract_json(output: str) -> str:
                 if depth == 0:
                     return stripped[idx:i+1]
     return '{"error":' + _json_quote(f"Unexpected output: {stripped[:200]}") + '}'
+
+
+def _safe_json(s: str):
+    """Parse a JSON string, returning the object or None on failure."""
+    import json
+    try:
+        obj = json.loads(s)
+        return obj if isinstance(obj, dict) else None
+    except (ValueError, TypeError):
+        return None
 
 
 @mcp.tool()

@@ -1,6 +1,23 @@
 (* MCP helpers: JSON serialization for HOL Light goal states.
    Loaded via #use after HOL Light starts. No external dependencies. *)
 
+(* Private copies of HOL Light's goal combinators so the MCP proof path is
+   immune to a user shadowing g/e/b/r in their own eval (e.g. `let g = ...`).
+   Defined in terms of the lower-level primitives (refine/by/VALID/set_goal/
+   rotate) rather than aliasing g/e/b/r, so they don't depend on those names
+   being unshadowed at load time. Kept in sync with tactics.ml. *)
+let mcp_e tac = refine (by (VALID tac));;
+let mcp_r n = refine (rotate n);;
+let mcp_b () =
+  let l = !current_goalstack in
+  if length l = 1 then failwith "Can't back up any more" else
+  (current_goalstack := tl l; !current_goalstack);;
+let mcp_g t =
+  let fvs = sort (<) (map (fst o dest_var) (frees t)) in
+  (if fvs <> [] then
+     warn true ("Free variables in goal: " ^ end_itlist (fun s t -> s ^ ", " ^ t) fvs));
+  set_goal ([], t);;
+
 let mcp_json_escape s =
   let buf = Buffer.create (String.length s + 16) in
   String.iter (fun c -> match c with
@@ -162,11 +179,30 @@ let mcp_json_hypothesis idx =
 
 let mcp_json_backtrack n =
   try
-    for _ = 1 to n do ignore (b ()) done;
+    for _ = 1 to n do ignore (mcp_b ()) done;
     mcp_json_goalstate ()
   with
   | Failure msg -> mcp_json_error msg
   | e -> mcp_json_error (Printexc.to_string e);;
+
+
+(* Rebuild an earlier proof state by resetting the goalstack to its initial
+   (bottom) goalstate and replaying the given tactic prefix in a single
+   round-trip. Used as a fallback for backtrack when mcp_b() cannot rewind
+   past the set_goal boundary but a recording of the tactics exists. The
+   caller (server.py) supplies the prefix of tactics to keep. *)
+let mcp_json_backtrack_replay (tacs : tactic list) =
+  match !current_goalstack with
+  | [] -> mcp_json_error "no goal to rewind"
+  | l ->
+    (try
+      let initial = List.nth l (List.length l - 1) in
+      current_goalstack := [initial];
+      List.iter (fun tac -> ignore (mcp_e tac)) tacs;
+      mcp_json_after_tactic ()
+    with
+    | Failure msg -> mcp_json_error msg
+    | e -> mcp_json_error (Printexc.to_string e));;
 
 let mcp_json_search pat limit =
   let results = search [name pat] in
@@ -194,7 +230,7 @@ let mcp_json_apply_tactics (tacs : tactic list) =
     let proved = ref false in
     List.iter (fun tac ->
       if not !proved then begin
-        ignore (e tac);
+        ignore (mcp_e tac);
         incr steps;
         match !current_goalstack with
         | (_, [], _) :: _ -> proved := true
@@ -241,5 +277,10 @@ let mcp_json_apply_tactics (tacs : tactic list) =
   | e ->
     "{\"error\":" ^ mcp_json_string (Printexc.to_string e) ^
     ",\"step\":" ^ string_of_int !steps ^ "}";;
+
+(* Quiet HOL Light's per-step "CPU time" chatter, which otherwise bloats every
+   tool's output up to the sentinel. This is re-applied on every process start
+   because helpers are #use'd afresh after each (re)start. *)
+report_timing := false;;
 
 Printf.printf "MCP helpers loaded.\n%!";;

@@ -322,6 +322,52 @@ def test_backtrack_tool():
     assert "n" in result["goals"][0]["conclusion"]
 
 
+def test_backtrack_no_history_no_recording_errors():
+    # With no undo history and no recording, backtrack surfaces the honest
+    # "Can't back up any more" error rather than silently doing nothing.
+    server.set_goal("`T`")  # fresh goal, goalstack length 1
+    result = json.loads(server.backtrack())
+    assert "back up" in result.get("error", "")
+
+
+def test_backtrack_replay_fallback(tmp_path):
+    # Record a 2-step proof, then simulate lost undo history (goalstack reset
+    # to a single state, as happens after a restart). backtrack must then
+    # rebuild the 1-step state by replaying the recorded tactic prefix.
+    path = str(tmp_path / "rec.jsonl")
+    server.start_recording(path)
+    try:
+        server.set_goal("`!n. n + 0 = n`")
+        server.apply_tactic("GEN_TAC")
+        server.apply_tactic("ARITH_TAC")  # proves it; recording = 2 tactics
+        # Simulate lost undo history: reset the live goalstack to just the
+        # initial goalstate (as _replay_prefix would after a restart), without
+        # touching the recording. mcp_g is HOL's g; it resets to length 1.
+        server._eval_code("ignore(mcp_g `!n. n + 0 = n`)")
+        result = json.loads(server.backtrack())
+        # b() is exhausted (length 1); fallback replays [GEN_TAC], leaving the
+        # open post-GEN_TAC goal.
+        assert "goals" in result, result
+        assert "n + 0 = n" in result["goals"][0]["conclusion"], result
+    finally:
+        server.stop_recording()
+
+
+def test_backtrack_replay_too_deep_errors(tmp_path):
+    # Asking to back up more steps than were recorded cannot reach a valid
+    # target, so the honest b() error is surfaced.
+    path = str(tmp_path / "rec.jsonl")
+    server.start_recording(path)
+    try:
+        server.set_goal("`!n. n + 0 = n`")
+        server.apply_tactic("GEN_TAC")
+        server._eval_code("flush_goalstack()")
+        result = json.loads(server.backtrack(steps=5))
+        assert "back up" in result.get("error", ""), result
+    finally:
+        server.stop_recording()
+
+
 # --- search_theorems tool ---
 
 def test_search_theorems_tool():
