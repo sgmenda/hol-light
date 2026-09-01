@@ -189,6 +189,46 @@ def test_hol_restart():
     assert "2" in r["output"]
 
 
+# --- process death recovery (issue #1) ---
+
+def test_dead_process_auto_recovers():
+    # A dead process must not be silently reused (which hangs / behaves
+    # erratically). The next call should transparently start a fresh process.
+    old_pid = server._proc.pid
+    server._proc.kill()
+    server._proc.wait(timeout=5)
+    r = json.loads(server.eval("1 + 1"))
+    assert "2" in r["output"]
+    assert server._proc.poll() is None       # a live process again
+    assert server._proc.pid != old_pid       # ...and a genuinely new one
+
+
+def test_dead_process_loses_bindings_but_stays_usable():
+    # Document the honest semantics: a crash loses top-level bindings, but the
+    # server recovers cleanly rather than masking the death.
+    server.eval("let dead_proc_marker = 12345")
+    assert "12345" in _eval_output("dead_proc_marker")  # present before death
+    server._proc.kill()
+    server._proc.wait(timeout=5)
+    # Fresh process: the binding is gone (Unbound), and helpers were reloaded
+    # so the toplevel is fully functional again.
+    r = json.loads(server.eval("dead_proc_marker"))
+    assert r["success"] is False
+    assert "Unbound" in r["output"]
+    assert "2" in _eval_output("1 + 1")
+
+
+def test_write_to_dead_pipe_returns_error_not_exception():
+    # If the process dies during the write window, _eval_raw returns the death
+    # signal as a normal error result instead of raising.
+    server._start_hol()  # ensure a process exists
+    server._proc.stdin.close()  # force the next write to fail
+    out, _ = server._eval_raw("1 + 1")
+    assert "process died" in out
+    # And the server recovers on the next call.
+    assert "2" in _eval_output("1 + 1")
+
+
 # --- prove tool ---
 
 def test_prove_tool_success():

@@ -296,7 +296,15 @@ def _start_hol(
             "Fix the build and run hol_restart(rebuild_hol_and_checkpoint=true)."
         )
     if _proc is not None:
-        return
+        if _proc.poll() is None:
+            return
+        # The process exited/died (crash, OOM, kill). Don't silently reuse the
+        # dead handle — that leads to writes on a broken pipe and hangs, which
+        # looks to the user like "my bindings randomly disappeared". Tear it
+        # down and fall through to start a fresh process; _prepare_process_restart
+        # resets _helpers_loaded so helpers reload into the new toplevel.
+        _terminate_hol()
+        _prepare_process_restart()
     checkpoint = checkpoint or CHECKPOINT_NAME
     CHECKPOINT_NAME = checkpoint
     ckpt_files = _checkpoint_files(checkpoint)
@@ -441,8 +449,17 @@ def _eval_raw(code: str, timeout: int = None) -> tuple[str, float]:
         full += ";;"
     full += f'\nPrintf.printf "{SENTINEL}\\n%!";;\n'
     t0 = time.time()
-    _proc.stdin.write(full)
-    _proc.stdin.flush()
+    try:
+        _proc.stdin.write(full)
+        _proc.stdin.flush()
+    except (BrokenPipeError, OSError, ValueError):
+        # The process died between _start_hol's liveness check and this write.
+        # Tear it down and reset the loaded-helpers flag so the next call starts
+        # a fresh process AND reloads helpers into it. Return the death signal as
+        # a normal (error) result instead of raising.
+        _terminate_hol()
+        _prepare_process_restart()
+        return "[HOL Light process died unexpectedly]", round(time.time() - t0, 3)
     result = _wait_for_sentinel(timeout)
     return result, round(time.time() - t0, 3)
 
@@ -474,7 +491,8 @@ def _truncate(s: str, limit: int) -> tuple[str, bool]:
 def _is_error_output(s: str) -> bool:
     """Heuristic: check if OCaml output indicates an error."""
     for marker in ("Error:", "Exception:", "Failure", "Unbound", "Parse error",
-                   "Syntax error", "Type error", "This expression has type"):
+                   "Syntax error", "Type error", "This expression has type",
+                   "process died", "[timeout waiting"):
         if marker in s:
             return True
     return False
