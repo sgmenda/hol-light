@@ -58,6 +58,8 @@ See [TUTORIAL.md](TUTORIAL.md) for more examples (including s2n-bignum ARM proof
 
 For goals with large hypotheses (e.g. AES-tweak terms), `goal_state` can be tens of KB because it serializes every hypothesis in full. Prefer `goal_summary` to see the shape (`num_hyps`, `conclusion_chars`, a truncated `conclusion_head`) at fixed small cost, then `goal_hypothesis(index)` to read a specific hypothesis.
 
+HOL Light's `report_timing` is set off at startup so per-step "CPU time" lines don't bloat tool output; set `report_timing := true` via `eval` if you want them back.
+
 ## Setup
 
 ```bash
